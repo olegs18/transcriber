@@ -145,11 +145,16 @@ if 'manual_input' not in st.session_state:
     st.session_state['manual_input'] = ""
 
 if input_method == "Ввод вручную":
-    st.subheader("➕ Быстрое добавление (с русского на румынский):")
-    ru_input = st.text_input("✍️ Введите фразу на русском")
-    if st.button("Добавить во ввод", key="add_russian"):
-        ro_phrase = translate_ru_to_ro(ru_input)
-        st.session_state['manual_input'] += ("\n" if st.session_state['manual_input'] else "") + ro_phrase.strip()
+    st.subheader("➕ Быстрое добавление (с любого языка → на румынский):")
+    lang_detect = st.selectbox("Исходный язык:", [("Русский", "ru"), ("Английский", "en")], key="lang_detect")
+    ru_input = st.text_input("✍️ Введите фразу:", key="text_to_translate")
+    if st.button("Добавить во ввод", key="add_input_translated"):
+        try:
+            ro_phrase = asyncio.run(translator.translate(ru_input, src=lang_detect[1], dest='ro')).text
+            st.session_state['manual_input'] += ("" if st.session_state['manual_input'] else "") + ro_phrase.strip()
+        except Exception as e:
+            st.warning(f"[ошибка перевода: {e}]")
+
     st.subheader("📥 Введите фразы (по одной на строку):")
     st.session_state['manual_input'] = st.text_area("", value=st.session_state['manual_input'], height=200)
     if st.session_state['manual_input'].strip():
