@@ -28,10 +28,11 @@ RU_REPLACEMENTS = [
     ('ce', 'че'), ('ci', 'чи'), ('ge', 'дже'), ('gi', 'джи'),
     ('ch', 'к'), ('gh', 'г'), ('ă', 'э'), ('â', 'ы'), ('î', 'ы'),
     ('ș', 'ш'), ('ţ', 'ц'), ('ț', 'ц'), ('a', 'а'), ('e', 'е'),
-    ('i', 'и'), ('o', 'о'), ('u', 'у'), ('b', 'б'), ('c', 'к'), ('d', 'д'),
-    ('f', 'ф'), ('g', 'г'), ('h', 'х'), ('j', 'ж'), ('k', 'к'), ('l', 'л'),
-    ('m', 'м'), ('n', 'н'), ('p', 'п'), ('q', 'к'), ('r', 'р'), ('s', 'с'),
-    ('t', 'т'), ('v', 'в'), ('w', 'в'), ('x', 'кс'), ('y', 'и'), ('z', 'з')
+    ('i', 'и'), ('o', 'о'), ('u', 'у'), ('b', 'б'), ('c', 'к'),
+    ('d', 'д'), ('f', 'ф'), ('g', 'г'), ('h', 'х'), ('j', 'ж'),
+    ('k', 'к'), ('l', 'л'), ('m', 'м'), ('n', 'н'), ('p', 'п'),
+    ('q', 'к'), ('r', 'р'), ('s', 'с'), ('t', 'т'), ('v', 'в'),
+    ('w', 'в'), ('x', 'кс'), ('y', 'и'), ('z', 'з')
 ]
 
 LANG_FLAGS = {
@@ -40,6 +41,19 @@ LANG_FLAGS = {
 }
 
 translator = Translator()
+
+async def translate_phrase(phrase: str, dest='ru') -> str:
+    try:
+        translation = await translator.translate(phrase, src='ro', dest=dest)
+        return translation.text
+    except Exception as e:
+        return f"[ошибка перевода: {e}]"
+
+def translate_ru_to_ro(phrase: str) -> str:
+    try:
+        return asyncio.run(translator.translate(phrase, src='ru', dest='ro')).text
+    except Exception as e:
+        return f"[ошибка перевода: {e}]"
 
 def normalize(phrase: str) -> str:
     words = phrase.lower().split()
@@ -50,13 +64,6 @@ def apply_replacements(phrase: str, rules: List[tuple]) -> str:
     for orig, repl in rules:
         result = result.replace(orig, repl)
     return result
-
-async def translate_phrase(phrase: str, dest='ru') -> str:
-    try:
-        translation = await translator.translate(phrase, src='ro', dest=dest)
-        return translation.text
-    except Exception as e:
-        return f"[ошибка перевода: {e}]"
 
 def speak(phrase: str, filename: str):
     mp3_path = os.path.join(AUDIO_FOLDER, filename)
@@ -129,14 +136,24 @@ if st.button("🧹 Очистить кэш и сессию"):
     if os.path.exists(LAST_SESSION_FILE):
         os.remove(LAST_SESSION_FILE)
     st.session_state["results"] = []
+    st.session_state["manual_input"] = ""
     st.success("Кэш и сессия очищены.")
 
 phrases = []
 
+if 'manual_input' not in st.session_state:
+    st.session_state['manual_input'] = ""
+
 if input_method == "Ввод вручную":
-    text_input = st.text_area("Введите фразы (по одной на строку):", height=200)
-    if text_input.strip():
-        phrases = [line.strip() for line in text_input.splitlines() if line.strip()]
+    st.subheader("➕ Быстрое добавление (с русского на румынский):")
+    ru_input = st.text_input("✍️ Введите фразу на русском")
+    if st.button("Добавить во ввод", key="add_russian"):
+        ro_phrase = translate_ru_to_ro(ru_input)
+        st.session_state['manual_input'] += ("\n" if st.session_state['manual_input'] else "") + ro_phrase.strip()
+    st.subheader("📥 Введите фразы (по одной на строку):")
+    st.session_state['manual_input'] = st.text_area("", value=st.session_state['manual_input'], height=200)
+    if st.session_state['manual_input'].strip():
+        phrases = [line.strip() for line in st.session_state['manual_input'].splitlines() if line.strip()]
 else:
     uploaded_file = st.file_uploader("Загрузите .txt файл", type=["txt"])
     if uploaded_file:
@@ -172,7 +189,7 @@ if st.session_state['results']:
         )) and (lang_filter == "Все" or row['lang'] == lang_filter):
             filtered.append(row)
 
-    st.download_button("📅 Скачать CSV", data=open(LAST_SESSION_FILE if save_last_session else CSV_CACHE_FILE, "rb"), file_name="results.csv")
+    st.download_button("📥 Скачать CSV", data=open(LAST_SESSION_FILE if save_last_session else CSV_CACHE_FILE, "rb"), file_name="results.csv")
 
     audio_zip = make_zip_of_audio([row['original'] for row in filtered])
     st.download_button("🔊 Скачать MP3 (архив)", data=audio_zip, file_name="audio_files.zip")
@@ -180,7 +197,7 @@ if st.session_state['results']:
     st.subheader("📊 Результаты:")
     st.dataframe(filtered, use_container_width=True)
 
-    st.subheader("🎵 Прослушать озвучку:")
+    st.subheader("🎧 Прослушать озвучку:")
     for row in filtered:
         normalized = row['normalized']
         filename = f"{normalized.replace(' ', '_')}.mp3"
