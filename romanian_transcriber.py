@@ -2,16 +2,16 @@ import asyncio
 import csv
 import os
 import argparse
-from typing import List
+from typing import List, Set, Dict
 from googletrans import Translator
 from gtts import gTTS
 
-# Автоматическая замена устаревших/специфических слов
+# Устаревшие формы
 NORMALIZATION_MAP = {
     'vinere': 'vineri'
 }
 
-# Заменяемые звуки для транскрипции
+# Транскрипционные замены
 IPA_REPLACEMENTS = [
     ('ce', 't͡ʃe'), ('ci', 't͡ʃi'), ('ge', 'd͡ʒe'), ('gi', 'd͡ʒi'),
     ('ch', 'k'), ('gh', 'g'),
@@ -33,36 +33,60 @@ RU_REPLACEMENTS = [
 
 translator = Translator()
 
-def normalize(word: str) -> str:
-    return NORMALIZATION_MAP.get(word.lower(), word)
+def normalize(phrase: str) -> str:
+    words = phrase.lower().split()
+    return ' '.join(NORMALIZATION_MAP.get(w, w) for w in words)
 
-def apply_replacements(word: str, rules: List[tuple]) -> str:
-    word = word.lower()
+def apply_replacements(phrase: str, rules: List[tuple]) -> str:
+    result = phrase.lower()
     for orig, repl in rules:
-        word = word.replace(orig, repl)
-    return word
+        result = result.replace(orig, repl)
+    return result
 
-async def translate_word(word: str, src='ro', dest='ru') -> str:
+async def translate_phrase(phrase: str, src='ro', dest='ru') -> str:
     try:
-        translation = await translator.translate(word, src=src, dest=dest)
+        translation = await translator.translate(phrase, src=src, dest=dest)
         return translation.text
     except Exception as e:
         return f"[ошибка перевода: {e}]"
 
-def speak(word: str, lang='ro', filename='audio'):
+def speak(phrase: str, lang='ro', filename='audio'):
     filename_mp3 = f"{filename}.mp3"
-    tts = gTTS(text=word, lang=lang)
+    tts = gTTS(text=phrase, lang=lang)
     tts.save(filename_mp3)
 
-async def transcribe(word: str) -> dict:
-    normalized = normalize(word)
-    return {
-        'original': word,
+def read_existing_csv(csv_path: str) -> Dict[str, dict]:
+    if not os.path.exists(csv_path):
+        return {}
+
+    existing_data = {}
+    with open(csv_path, mode="r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            key = row.get("normalized", "").strip()
+            if key:
+                existing_data[key] = row
+    return existing_data
+
+async def transcribe(phrase: str, cache: Dict[str, dict]) -> dict:
+    normalized = normalize(phrase)
+
+    if normalized in cache:
+        result = cache[normalized]
+        print(f"{result['original']} (→ {result['normalized']}):")
+        print(f"  IPA: {result['ipa']}")
+        print(f"  Рус: {result['ru_phonetic']}")
+        print(f"  Перевод: {result['translation']} ✅ (из кэша)")
+        return result
+
+    result = {
+        'original': phrase,
         'normalized': normalized,
         'ipa': apply_replacements(normalized, IPA_REPLACEMENTS),
         'ru_phonetic': apply_replacements(normalized, RU_REPLACEMENTS),
-        'translation': await translate_word(normalized)
+        'translation': await translate_phrase(normalized)
     }
+    return result
 
 async def save_to_csv(data: List[dict], filename="transcription_results.csv"):
     with open(filename, mode="w", encoding="utf-8", newline="") as f:
@@ -70,24 +94,44 @@ async def save_to_csv(data: List[dict], filename="transcription_results.csv"):
         writer.writeheader()
         writer.writerows(data)
 
+def read_phrases_from_txt(file_path: str) -> List[str]:
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"Файл не найден: {file_path}")
+    with open(file_path, encoding='utf-8') as f:
+        phrases = [line.strip() for line in f if line.strip()]
+    return phrases
+
 async def main():
-    parser = argparse.ArgumentParser(description="Romanian Transcriber CLI")
-    parser.add_argument('--words', nargs='+', required=True, help='Список слов на румынском')
-    parser.add_argument('--csv', default='transcription_results.csv', help='Файл для экспорта CSV')
+    parser = argparse.ArgumentParser(description="Romanian Transcriber CLI (with cache and phrases)")
+    parser.add_argument('--words', nargs='+', help='Фразы через пробел')
+    parser.add_argument('--txt', help='Путь к .txt файлу с фразами')
+    parser.add_argument('--csv', default='transcription_results.csv', help='Файл CSV для чтения и записи')
     parser.add_argument('--audio_dir', default='audio', help='Папка для сохранения mp3')
     args = parser.parse_args()
 
     os.makedirs(args.audio_dir, exist_ok=True)
-    results = []
+    input_items = args.words if args.words else []
 
-    for word in args.words:
-        result = await transcribe(word)
+    if args.txt:
+        input_items += read_phrases_from_txt(args.txt)
+
+    if not input_items:
+        print("❗ Укажите фразы через --words или --txt путь_к_файлу.txt")
+        return
+
+    # Удаляем повторы
+    unique_phrases: Set[str] = set(input_items)
+
+    # Загружаем кэш из CSV
+    cache = read_existing_csv(args.csv)
+    results = list(cache.values())  # уже сохранённые записи
+
+    normalized_in_cache = set(cache.keys())
+
+    for phrase in unique_phrases:
+        result = await transcribe(phrase, cache)
         results.append(result)
-        print(f"{result['original']} (→ {result['normalized']}):")
-        print(f"  IPA: {result['ipa']}")
-        print(f"  Рус: {result['ru_phonetic']}")
-        print(f"  Перевод: {result['translation']}")
-        speak(result['normalized'], filename=os.path.join(args.audio_dir, result['normalized']))
+        speak(result['normalized'], filename=os.path.join(args.audio_dir, result['normalized'].replace(' ', '_')))
         print()
 
     await save_to_csv(results, filename=args.csv)
