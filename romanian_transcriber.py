@@ -1,9 +1,15 @@
 import asyncio
 import csv
+import os
+import argparse
 from typing import List
 from googletrans import Translator
 from gtts import gTTS
-import os
+
+# Автоматическая замена устаревших/специфических слов
+NORMALIZATION_MAP = {
+    'vinere': 'vineri'
+}
 
 # Заменяемые звуки для транскрипции
 IPA_REPLACEMENTS = [
@@ -27,6 +33,9 @@ RU_REPLACEMENTS = [
 
 translator = Translator()
 
+def normalize(word: str) -> str:
+    return NORMALIZATION_MAP.get(word.lower(), word)
+
 def apply_replacements(word: str, rules: List[tuple]) -> str:
     word = word.lower()
     for orig, repl in rules:
@@ -46,34 +55,42 @@ def speak(word: str, lang='ro', filename='audio'):
     tts.save(filename_mp3)
 
 async def transcribe(word: str) -> dict:
+    normalized = normalize(word)
     return {
         'original': word,
-        'ipa': apply_replacements(word, IPA_REPLACEMENTS),
-        'ru_phonetic': apply_replacements(word, RU_REPLACEMENTS),
-        'translation': await translate_word(word)
+        'normalized': normalized,
+        'ipa': apply_replacements(normalized, IPA_REPLACEMENTS),
+        'ru_phonetic': apply_replacements(normalized, RU_REPLACEMENTS),
+        'translation': await translate_word(normalized)
     }
 
 async def save_to_csv(data: List[dict], filename="transcription_results.csv"):
     with open(filename, mode="w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["original", "ipa", "ru_phonetic", "translation"])
+        writer = csv.DictWriter(f, fieldnames=["original", "normalized", "ipa", "ru_phonetic", "translation"])
         writer.writeheader()
         writer.writerows(data)
 
 async def main():
-    words = ["sâmbătă", "vinere", "miercuri", "gheață", "înțelegere"]
-    results = []
-    os.makedirs("audio", exist_ok=True)
+    parser = argparse.ArgumentParser(description="Romanian Transcriber CLI")
+    parser.add_argument('--words', nargs='+', required=True, help='Список слов на румынском')
+    parser.add_argument('--csv', default='transcription_results.csv', help='Файл для экспорта CSV')
+    parser.add_argument('--audio_dir', default='audio', help='Папка для сохранения mp3')
+    args = parser.parse_args()
 
-    for word in words:
+    os.makedirs(args.audio_dir, exist_ok=True)
+    results = []
+
+    for word in args.words:
         result = await transcribe(word)
         results.append(result)
-        print(f"{result['original']}:")
+        print(f"{result['original']} (→ {result['normalized']}):")
         print(f"  IPA: {result['ipa']}")
         print(f"  Рус: {result['ru_phonetic']}")
         print(f"  Перевод: {result['translation']}")
-        speak(result['original'], filename=os.path.join("audio", result['original']))
+        speak(result['normalized'], filename=os.path.join(args.audio_dir, result['normalized']))
         print()
 
-    await save_to_csv(results)
+    await save_to_csv(results, filename=args.csv)
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
