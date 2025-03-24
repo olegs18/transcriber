@@ -7,6 +7,8 @@ import streamlit as st
 from googletrans import Translator
 from gtts import gTTS
 from io import StringIO, BytesIO
+from pydub import AudioSegment
+
 
 # === Конфигурация ===
 CSV_CACHE_FILE = "transcription_cache.csv"
@@ -65,10 +67,10 @@ def apply_replacements(phrase: str, rules: List[tuple]) -> str:
         result = result.replace(orig, repl)
     return result
 
-def speak(phrase: str, filename: str):
+def speak(phrase: str, filename: str, lang='ro'):
     mp3_path = os.path.join(AUDIO_FOLDER, filename)
     if not os.path.exists(mp3_path):
-        tts = gTTS(text=phrase, lang='ro')
+        tts = gTTS(text=phrase, lang=lang)
         tts.save(mp3_path)
     return mp3_path
 
@@ -111,15 +113,29 @@ async def process_phrases(phrases: List[str], cache: Dict[str, dict], lang='ru')
         speak(normalized, f"{normalized.replace(' ', '_')}.mp3")
     return results
 
-def make_zip_of_audio(phrases: List[str]) -> BytesIO:
+def make_zip_of_audio(phrases: List[str], with_translation=False, lang='ru') -> BytesIO:
     zip_buffer = BytesIO()
     with zipfile.ZipFile(zip_buffer, "w") as zip_file:
         for phrase in phrases:
             normalized = normalize(phrase)
-            filename = f"{normalized.replace(' ', '_')}.mp3"
-            path = os.path.join(AUDIO_FOLDER, filename)
-            if os.path.exists(path):
-                zip_file.write(path, arcname=filename)
+            base_name = normalized.replace(' ', '_')
+            ro_file = f"{base_name}_ro.mp3"
+            ro_path = speak(normalized, ro_file, lang='ro')
+            zip_file.write(ro_path, arcname=ro_file)
+
+            if with_translation:
+                for row in st.session_state['results']:
+                    if row['normalized'] == normalized and row['lang'] == lang:
+                        trans_text = row['translation']
+                        tr_file = f"{base_name}_{lang}.mp3"
+                        tr_path = speak(trans_text, tr_file, lang=lang)
+
+                        # объединённый файл
+                        merged = AudioSegment.from_file(ro_path) + AudioSegment.silent(duration=500) + AudioSegment.from_file(tr_path)
+                        final_path = os.path.join(AUDIO_FOLDER, f"{base_name}_combo.mp3")
+                        merged.export(final_path, format="mp3")
+
+                        zip_file.write(final_path, arcname=f"{base_name}_combo.mp3")
     zip_buffer.seek(0)
     return zip_buffer
 
@@ -212,12 +228,26 @@ if st.session_state['results']:
     st.dataframe(filtered, use_container_width=True)
 
     st.subheader("🎧 Прослушать озвучку:")
+    if st.button("▶️ Воспроизвести всё (румынский)"):
+        combined = AudioSegment.empty()
+        for row in filtered:
+            normalized = row['normalized']
+            filename = f"{normalized.replace(' ', '_')}_ro.mp3"
+            path = speak(normalized, filename, lang='ro')
+            if os.path.exists(path):
+                combined += AudioSegment.from_file(path) + AudioSegment.silent(duration=300)
+        st.audio(combined.export(format="mp3"), format="audio/mp3")
+
     for row in filtered:
         normalized = row['normalized']
-        filename = f"{normalized.replace(' ', '_')}.mp3"
-        path = os.path.join(AUDIO_FOLDER, filename)
+        filename = f"{normalized.replace(' ', '_')}_ro.mp3"
+        path = speak(normalized, filename, lang='ro')
         if os.path.exists(path):
             st.markdown(f"**{row['original']}**")
             st.audio(path, format="audio/mp3")
+
+    if st.checkbox("🔁 Включить двойную озвучку (ro → перевод)"):
+        double_zip = make_zip_of_audio([row['original'] for row in filtered], with_translation=True, lang=translation_lang[1])
+        st.download_button("📥 Скачать двойную озвучку (zip)", data=double_zip, file_name="combo_audio.zip")
 else:
     st.info("Введите или загрузите хотя бы одну фразу для обработки.")
