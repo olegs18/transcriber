@@ -250,6 +250,20 @@ if st.session_state['results']:
             st.audio(path, format="audio/mp3")
 
     if st.checkbox("🔁 Включить двойную озвучку (ro → перевод)"):
+        from pydub import AudioSegment
+        combo_audio = AudioSegment.empty()
+        for row in filtered:
+            normalized = row['normalized']
+            base = normalized.replace(' ', '_')
+            ro_path = speak(normalized, f"{base}_ro.mp3", lang='ro')
+            tr_path = speak(row['translation'], f"{base}_{translation_lang[1]}.mp3", lang=translation_lang[1])
+            if os.path.exists(ro_path) and os.path.exists(tr_path):
+                seg = AudioSegment.from_file(ro_path) + AudioSegment.silent(duration=500) + AudioSegment.from_file(tr_path)
+                combo_audio += seg + AudioSegment.silent(duration=500)
+        if len(combo_audio) > 0:
+            combined_path = os.path.join(AUDIO_FOLDER, "all_combined.mp3")
+            combo_audio.export(combined_path, format="mp3")
+            st.audio(combined_path, format="audio/mp3")
         double_zip = make_zip_of_audio([row['original'] for row in filtered], with_translation=True, lang=translation_lang[1])
         st.download_button("📥 Скачать двойную озвучку (zip)", data=double_zip, file_name="combo_audio.zip")
 else:
