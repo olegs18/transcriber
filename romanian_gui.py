@@ -105,7 +105,7 @@ async def process_phrases(phrases: List[str], cache: Dict[str, dict], lang='ru')
             'normalized': normalized,
             'ipa': apply_replacements(normalized, IPA_REPLACEMENTS),
             'ru_phonetic': apply_replacements(normalized, RU_REPLACEMENTS),
-            'translation': await translate_phrase(normalized, dest=lang),
+            'translation': await translate_phrase(normalized, dest=lang if lang != study_lang_code else 'ru'),
             'lang': lang
         }
         cache[cache_key] = result
@@ -141,7 +141,12 @@ def make_zip_of_audio(phrases: List[str], with_translation=False, lang='ru') -> 
 
 # === Streamlit UI ===
 st.set_page_config(page_title="Romanian Transcriber", layout="wide")
-st.title("📘 Romanian Transcriber & Translator")
+st.title("📘 Transcriber & Translator")
+study_lang = st.selectbox("🧠 Язык изучения:", ["Румынский (ro)", "Английский (en)"], index=0)
+study_lang_code = "ro" if "ro" in study_lang else "en"
+
+study_lang = st.selectbox("🧠 Язык изучения:", ["Румынский (ro)", "Английский (en)"], index=0)
+study_lang_code = "ro" if "ro" in study_lang else "en"
 
 input_method = st.radio("Выберите способ ввода:", ["Ввод вручную", "Загрузка .txt файла"])
 translation_lang = st.selectbox("Язык перевода:", [("🇷🇺 Русский", "ru"), ("🇬🇧 Английский", "en")])
@@ -197,7 +202,7 @@ if phrases:
     if st.button("▶️ Обработать"):
         with st.spinner("Обработка..."):
             cache = load_csv_cache(CSV_CACHE_FILE)
-            results = asyncio.run(process_phrases(phrases, cache, lang=translation_lang[1]))
+            results = asyncio.run(process_phrases(phrases, cache, lang=study_lang_code))
             save_csv_file(list(cache.values()), CSV_CACHE_FILE)
             if save_last_session:
                 save_csv_file(results, LAST_SESSION_FILE)
