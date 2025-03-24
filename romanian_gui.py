@@ -4,11 +4,10 @@ import os
 import zipfile
 from typing import List, Dict
 import streamlit as st
+from pydub import AudioSegment
 from googletrans import Translator
 from gtts import gTTS
 from io import StringIO, BytesIO
-from pydub import AudioSegment
-
 
 # === Конфигурация ===
 CSV_CACHE_FILE = "transcription_cache.csv"
@@ -236,7 +235,11 @@ if st.session_state['results']:
             path = speak(normalized, filename, lang='ro')
             if os.path.exists(path):
                 combined += AudioSegment.from_file(path) + AudioSegment.silent(duration=300)
-        st.audio(combined.export(format="mp3"), format="audio/mp3")
+        buffer = BytesIO()
+        combined.export(buffer, format="mp3")
+        buffer.seek(0)
+        st.audio(buffer, format="audio/mp3")
+
 
     for row in filtered:
         normalized = row['normalized']
