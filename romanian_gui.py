@@ -8,6 +8,7 @@ from pydub import AudioSegment
 from googletrans import Translator
 from gtts import gTTS
 from io import StringIO, BytesIO
+import base64
 
 # === Конфигурация ===
 CSV_CACHE_FILE = "transcription_cache.csv"
@@ -238,7 +239,18 @@ if st.session_state['results']:
         buffer = BytesIO()
         combined.export(buffer, format="mp3")
         buffer.seek(0)
-        st.audio(buffer, format="audio/mp3")
+        st.markdown("<div id='scroll_here'></div>", unsafe_allow_html=True)
+        b64 = base64.b64encode(buffer.read()).decode()
+        loop_attr = " loop" if st.checkbox("🔁 Повторять всё по кругу") else ""
+        audio_tag = f"""
+        <audio autoplay controls{loop_attr}>
+        <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
+        </audio>
+        <script>
+          document.getElementById('scroll_here').scrollIntoView({{behavior: 'smooth'}});
+        </script>
+        """
+        st.markdown(audio_tag, unsafe_allow_html=True)
 
 
     for row in filtered:
