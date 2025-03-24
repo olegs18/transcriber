@@ -156,6 +156,15 @@ if input_method == "Ввод вручную":
             st.warning(f"[ошибка перевода: {e}]")
 
     st.subheader("📥 Введите фразы (по одной на строку):")
+    if st.button("📤 Загрузить фразы из кэша"):
+        try:
+            with open(CSV_CACHE_FILE, mode="r", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                cached_lines = sorted(set(row["original"] for row in reader if row.get("original")))
+                st.session_state['manual_input'] = "\n".join(cached_lines)
+                st.success(f"Загружено {len(cached_lines)} фраз из кэша.")
+        except Exception as e:
+            st.warning(f"Не удалось загрузить кэш: {e}")
     st.session_state['manual_input'] = st.text_area("", value=st.session_state['manual_input'], height=200)
     if st.session_state['manual_input'].strip():
         phrases = [line.strip() for line in st.session_state['manual_input'].splitlines() if line.strip()]
