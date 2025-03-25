@@ -174,6 +174,8 @@ load_session = st.selectbox("📂 Загрузить сессию:", ["(не в�
 input_method = st.radio("Выберите способ ввода:", ["Ввод вручную", "Загрузка .txt файла"])
 translation_lang = st.selectbox("Язык перевода:", [(LANG_FLAGS['ru'], "ru"), (LANG_FLAGS['en'], "en")])
 save_last_session = st.checkbox("Сохранять текущую сессию отдельно", value=True)
+append_to_current_session = st.checkbox("📎 Добавить к текущей загруженной сессии (если выбрана)", value=True)
+
 phrases = []
 
 if 'manual_input' not in st.session_state:
@@ -214,9 +216,24 @@ if phrases and st.button("▶️ Обработать"):
         results = asyncio.run(process_phrases(phrases, cache, lang=translation_lang[1], study_lang_code=study_lang_code))
         save_csv_file(list(cache.values()), CSV_CACHE_FILE)
         if save_last_session:
-            session_name = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-            save_csv_file(results, os.path.join(LAST_SESSION_FOLDER, session_name))
-        st.session_state['results'] = results
+            if load_session != "(не выбрана)" and append_to_current_session:
+                # 🔁 Добавляем к текущей сессии
+                existing_path = os.path.join(LAST_SESSION_FOLDER, load_session)
+                merged = load_csv_cache(existing_path)
+                for r in results:
+                    merged[(r['normalized'], r['lang'])] = r
+                save_csv_file(list(merged.values()), existing_path)
+                st.session_state['results'] = list(merged.values())
+
+                st.success(f"Слова добавлены в сессию: {load_session}")
+            else:
+                # 🆕 Создаём новую сессию
+                session_name = f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+                save_csv_file(results, os.path.join(LAST_SESSION_FOLDER, session_name))
+                st.success(f"Создана новая сессия: {session_name}")
+        if not (load_session != "(не выбрана)" and append_to_current_session):        
+            st.session_state['results'] = results
+        
     st.success("✅ Готово!")
 
 if st.session_state['results']:
