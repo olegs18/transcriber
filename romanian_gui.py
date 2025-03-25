@@ -90,6 +90,9 @@ def load_csv_cache(csv_path: str) -> Dict[str, dict]:
     with open(csv_path, mode="r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
+            row = dict(row)
+            row.setdefault('known', '❌')
+            row.setdefault('category', '')
             key = (row.get("normalized", "").strip(), row.get("lang", "").strip())
             if key:
                 existing_data[key] = row
@@ -97,7 +100,10 @@ def load_csv_cache(csv_path: str) -> Dict[str, dict]:
 
 def save_csv_file(data: List[dict], csv_path: str):
     with open(csv_path, mode="w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=["original", "normalized", "ipa", "ru_phonetic", "translation", "lang", "known"])
+        writer = csv.DictWriter(
+            f,
+            fieldnames=["original", "normalized", "ipa", "ru_phonetic", "translation", "lang", "known", "category"]
+        )
         writer.writeheader()
         writer.writerows(data)
 
@@ -116,7 +122,8 @@ async def process_phrases(phrases: List[str], cache: Dict[str, dict], lang='ru',
             'ru_phonetic': apply_replacements(normalized, RU_REPLACEMENTS if study_lang_code == 'ro' else []),
             'translation': await translate_phrase(normalized, dest=lang if lang != study_lang_code else 'ru'),
             'lang': lang,
-            'known': '❌'
+            'known': '❌',
+            'category': st.session_state.get("category_input", "").strip()
         }
         cache[cache_key] = result
         results.append(result)
@@ -176,6 +183,7 @@ if load_session != "(не выбрана)":
 
 if input_method == "Ввод вручную":
     ru_input = st.text_input("✍️ Введите фразу (перевод на румынский будет добавлен):")
+    category_input = st.text_input("🏷️ Категория (опционально):", key="category_input")
     if st.button("Добавить перевод", key="add_translation"):
         try:
             ro_phrase = asyncio.run(translator.translate(ru_input, src=translation_lang[1], dest=study_lang_code)).text
@@ -248,19 +256,35 @@ if st.session_state['results']:
             double_zip = make_zip_of_audio([row['original'] for row in filtered], filtered, with_translation=True, lang=translation_lang[1], study_lang_code=study_lang_code)
             st.download_button("📥 Скачать двойную озвучку (zip)", data=double_zip, file_name="combo_audio.zip")
             
-# === Если есть результаты, показываем вкладки ===
+# === Если есть результаты, показываем фильтр и вкладки ===
 if st.session_state['results']:
     st.markdown("---")
-    tabs = st.tabs(["📋 Таблица", "🧠 Карточки (Flashcards)"])
-    filter_text = st.text_input("🔍 Фильтр по фразе или переводу:", key="filter_text")
+    
+    # 🎛️ Фильтрация перед вкладками
+    col1, col2 = st.columns([3, 2])
+    with col1:
+        filter_text = st.text_input("🔍 Фильтр по фразе или переводу:", key="filter_text")
+    with col2:
+        show_only_unknown = st.checkbox("🔁 Только ❌ невыученные", key="filter_unknown")
 
     # Инициализируем known_map один раз
     if 'known_map' not in st.session_state:
         st.session_state['known_map'] = {}
+        
+    all_categories = sorted(set(r.get("category", "").strip() for r in st.session_state['results'] if r.get("category")))
+    selected_category = st.selectbox("📂 Категория:", ["(все)"] + all_categories, index=0)
 
-    # Фильтрация без копирования
-    df_display = [r for r in st.session_state['results']
-                  if filter_text.lower() in r['original'].lower() or filter_text.lower() in r['translation'].lower()]
+    # 🧠 Фильтрация и статус
+    df_display = [
+        r for r in st.session_state['results']
+        if (not show_only_unknown or r.get("known") != '✅')
+        and (selected_category == "(все)" or r.get("category", "") == selected_category)
+        and (filter_text.lower() in r['original'].lower() or filter_text.lower() in r['translation'].lower())
+    ]
+
+
+    # === Вкладки ===
+    tabs = st.tabs(["📋 Таблица", "🧠 Карточки (Flashcards)"])
 
     # === Вкладка карточек ===
     with tabs[1]:
@@ -270,13 +294,18 @@ if st.session_state['results']:
             normalized_key = row['normalized']
             lang_key = row['lang']
 
-            # Загружаем known из session_state, если есть
+            # Загрузим статус known
             known_val = st.session_state['known_map'].get((normalized_key, lang_key), row.get('known', '❌'))
-            row['known'] = known_val  # Обновим строку для отображения и сохранения
+            row['known'] = known_val
 
-            with st.expander(f"{row['original']} → {row['translation']}"):
+            # Автооткрытие первой незнакомой карточки
+            auto_open = True if show_only_unknown and known_val != '✅' and idx == 0 else False
+
+            with st.expander(f"{row['original']} → {row['translation']}", expanded=auto_open):
                 st.markdown(f"IPA: `{row.get('ipa', '')}`")
                 st.markdown(f"Фонетика: `{row.get('ru_phonetic', '')}`")
+                if row.get("category"):
+                    st.markdown(f"🏷️ Категория: _{row['category']}_")
 
                 audio_path = speak(
                     row['normalized'],
@@ -285,8 +314,14 @@ if st.session_state['results']:
                 )
                 st.audio(audio_path)
 
-                st.markdown(f"**Текущий статус:** {row['known']}")
+                # Цветной статус
+                status_color = "green" if known_val == '✅' else "red"
+                st.markdown(
+                    f"**Текущий статус:** <span style='color:{status_color}'>{known_val}</span>",
+                    unsafe_allow_html=True
+                )
 
+                # Кнопки
                 col1, col2 = st.columns(2)
                 if col1.button("✅ Знаю", key=f"know_{idx}"):
                     st.session_state['known_map'][(normalized_key, lang_key)] = '✅'
@@ -297,9 +332,14 @@ if st.session_state['results']:
 
         if st.button("💾 Сохранить карточки", key="save_cards"):
             save_csv_file(st.session_state['results'], CSV_CACHE_FILE)
+            
+            # Если загружена сессия — обновим её тоже
+            if load_session != "(не выбрана)":
+                save_csv_file(st.session_state['results'], os.path.join(LAST_SESSION_FOLDER, load_session))
+                
             st.success("Карточки сохранены!")
 
-    # === Вкладка с таблицей ===
+    # === Вкладка таблицы ===
     with tabs[0]:
         st.subheader("📊 Результаты:")
 
@@ -313,15 +353,19 @@ if st.session_state['results']:
 
         if st.button("💾 Сохранить с прогрессом", key="save_known"):
             save_csv_file(st.session_state['results'], CSV_CACHE_FILE)
+            
+            # Если загружена сессия — обновим её тоже
+            if load_session != "(не выбрана)":
+                save_csv_file(st.session_state['results'], os.path.join(LAST_SESSION_FOLDER, load_session))
+        
             st.success("Сохранено!")
 
-        # Отладка
-        st.code("Пример первой строки в results:")
+    # === Служебная отладка ===
+    with st.expander("📦 Отладка"):
+        if df_display:
+            st.code("Первый из отфильтрованных:")
+            st.json(df_display[0])
         if st.session_state['results']:
+            st.code("Первый из session_state['results']:")
             st.json(st.session_state['results'][0])
 
-    # Отладка после всех карточек
-    st.code("Пример results:")
-    if df_display:
-        st.json(df_display[0])
-        st.json(st.session_state['results'][0])
