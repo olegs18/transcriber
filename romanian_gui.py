@@ -279,6 +279,7 @@ if st.session_state['results']:
     # Инициализируем known_map один раз
     if 'known_map' not in st.session_state:
         st.session_state['known_map'] = {}
+        st.session_state['date_known_map'] = {}
         
     all_categories = sorted(set(r.get("category", "").strip() for r in st.session_state['results'] if r.get("category")))
     selected_category = st.selectbox("📂 Категория:", ["(все)"] + all_categories, index=0)
@@ -305,6 +306,8 @@ if st.session_state['results']:
             # Загрузим статус known
             known_val = st.session_state['known_map'].get((normalized_key, lang_key), row.get('known', '❌'))
             row['known'] = known_val
+            date_known_val = st.session_state['date_known_map'].get((normalized_key, lang_key), row.get('date_known', ''))
+            row['date_known'] = date_known_val
 
             # Автооткрытие первой незнакомой карточки
             auto_open = True if show_only_unknown and known_val != '✅' and idx == 0 else False
@@ -332,21 +335,22 @@ if st.session_state['results']:
                 # Кнопки
                 col1, col2 = st.columns(2)
                 if col1.button("✅ Знаю", key=f"know_{idx}"):
-                    st.session_state['known_map'][(normalized_key, lang_key)] = '✅'
+                    k = (normalized_key, lang_key)
+                    st.session_state['known_map'][k] = '✅'
+                    st.session_state['date_known_map'][k] = datetime.now().strftime('%Y-%m-%d')
                     row['known'] = '✅'
-                    row['date_known'] = datetime.now().strftime('%Y-%m-%d')
+                    row['date_known'] = st.session_state['date_known_map'][k]
                 if col2.button("❌ Не знаю", key=f"dontknow_{idx}"):
-                    st.session_state['known_map'][(normalized_key, lang_key)] = '❌'
+                    st.session_state['known_map'][k] = '❌'
+                    st.session_state['date_known_map'][k] = ''
                     row['known'] = '❌'
                     row['date_known'] = ''
 
         if st.button("💾 Сохранить карточки", key="save_cards"):
             save_csv_file(st.session_state['results'], CSV_CACHE_FILE)
-            
             # Если загружена сессия — обновим её тоже
             if load_session != "(не выбрана)":
                 save_csv_file(st.session_state['results'], os.path.join(LAST_SESSION_FOLDER, load_session))
-                
             st.success("Карточки сохранены!")
 
     # === Вкладка таблицы ===
@@ -378,22 +382,33 @@ if st.session_state['results']:
 
     with tabs[2]:
         st.subheader("📊 Статистика изучения")
+        # Собираем все категории
+        
+        all_stats_categories = sorted(set(
+            r.get("category", "").strip() for r in st.session_state['results'] if r.get("category")
+        ))
 
-        # Считаем добавленные фразы по дате
-        added_dates = [
-            row.get("date_added", "")
-            for row in st.session_state['results']
-            if row.get("date_added")
+        selected_stat_category = st.selectbox("📂 Фильтр по категории:", ["(все)"] + all_stats_categories, index=0)
+
+        # Фильтруем фразы по категории
+        filtered_results = [
+            row for row in st.session_state['results']
+            if selected_stat_category == "(все)" or row.get("category") == selected_stat_category
         ]
+        st.code(selected_stat_category)
+        st.json(filtered_results)
+        # Считаем добавленные фразы
+        added_dates = [row.get("date_added", "") for row in filtered_results if row.get("date_added")]
         added_counts = Counter(added_dates)
 
-        # Считаем выученные фразы по дате
+        # Считаем выученные фразы
         known_dates = [
             row.get("date_known", "")
-            for row in st.session_state['results']
+            for row in filtered_results
             if row.get("known") == '✅' and row.get("date_known")
         ]
         known_counts = Counter(known_dates)
+
 
         # Объединяем все даты
         all_dates = sorted(set(added_counts.keys()) | set(known_counts.keys()))
