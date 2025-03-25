@@ -2,3 +2,4 @@ streamlit
 googletrans==4.0.2
 gTTS
 pydub
+pandas

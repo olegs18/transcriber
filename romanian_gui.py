@@ -11,6 +11,8 @@ from gtts import gTTS
 from io import StringIO, BytesIO
 import base64
 from datetime import datetime
+import pandas as pd
+from collections import Counter
 
 # === Пути к файлам и папкам ===
 CSV_CACHE_FILE = "transcription_cache.csv"
@@ -93,6 +95,8 @@ def load_csv_cache(csv_path: str) -> Dict[str, dict]:
             row = dict(row)
             row.setdefault('known', '❌')
             row.setdefault('category', '')
+            row.setdefault('date_added', '')
+            row.setdefault('date_known', '')
             key = (row.get("normalized", "").strip(), row.get("lang", "").strip())
             if key:
                 existing_data[key] = row
@@ -102,7 +106,10 @@ def save_csv_file(data: List[dict], csv_path: str):
     with open(csv_path, mode="w", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(
             f,
-            fieldnames=["original", "normalized", "ipa", "ru_phonetic", "translation", "lang", "known", "category"]
+            fieldnames=[
+                "original", "normalized", "ipa", "ru_phonetic", "translation",
+                "lang", "known", "category", "date_added", "date_known"
+            ]
         )
         writer.writeheader()
         writer.writerows(data)
@@ -123,7 +130,9 @@ async def process_phrases(phrases: List[str], cache: Dict[str, dict], lang='ru',
             'translation': await translate_phrase(normalized, dest=lang if lang != study_lang_code else 'ru'),
             'lang': lang,
             'known': '❌',
-            'category': st.session_state.get("category_input", "").strip()
+            'category': st.session_state.get("category_input", "").strip(),
+            'date_added': datetime.now().strftime('%Y-%m-%d'),
+            'date_known': '',
         }
         cache[cache_key] = result
         results.append(result)
@@ -282,9 +291,8 @@ if st.session_state['results']:
         and (filter_text.lower() in r['original'].lower() or filter_text.lower() in r['translation'].lower())
     ]
 
-
     # === Вкладки ===
-    tabs = st.tabs(["📋 Таблица", "🧠 Карточки (Flashcards)"])
+    tabs = st.tabs(["📋 Таблица", "🧠 Карточки (Flashcards)", "📊 Статистика"])
 
     # === Вкладка карточек ===
     with tabs[1]:
@@ -326,9 +334,11 @@ if st.session_state['results']:
                 if col1.button("✅ Знаю", key=f"know_{idx}"):
                     st.session_state['known_map'][(normalized_key, lang_key)] = '✅'
                     row['known'] = '✅'
+                    row['date_known'] = datetime.now().strftime('%Y-%m-%d')
                 if col2.button("❌ Не знаю", key=f"dontknow_{idx}"):
                     st.session_state['known_map'][(normalized_key, lang_key)] = '❌'
                     row['known'] = '❌'
+                    row['date_known'] = ''
 
         if st.button("💾 Сохранить карточки", key="save_cards"):
             save_csv_file(st.session_state['results'], CSV_CACHE_FILE)
@@ -348,8 +358,14 @@ if st.session_state['results']:
         percent = int(100 * known / total) if total > 0 else 0
         st.markdown(f"📈 Прогресс: **{known} из {total}** ({percent}%)")
         st.progress(percent)
-
-        st.dataframe(df_display, use_container_width=True)
+        for row in df_display:
+            row.setdefault("date_added", "")
+            row.setdefault("date_known", "")
+            row.setdefault("category", "")
+        st.dataframe(
+            pd.DataFrame(df_display)[["original", "translation", "known", "category", "date_added", "date_known"]],
+            use_container_width=True
+        )
 
         if st.button("💾 Сохранить с прогрессом", key="save_known"):
             save_csv_file(st.session_state['results'], CSV_CACHE_FILE)
@@ -360,6 +376,41 @@ if st.session_state['results']:
         
             st.success("Сохранено!")
 
+    with tabs[2]:
+        st.subheader("📊 Статистика изучения")
+
+        # Считаем добавленные фразы по дате
+        added_dates = [
+            row.get("date_added", "")
+            for row in st.session_state['results']
+            if row.get("date_added")
+        ]
+        added_counts = Counter(added_dates)
+
+        # Считаем выученные фразы по дате
+        known_dates = [
+            row.get("date_known", "")
+            for row in st.session_state['results']
+            if row.get("known") == '✅' and row.get("date_known")
+        ]
+        known_counts = Counter(known_dates)
+
+        # Объединяем все даты
+        all_dates = sorted(set(added_counts.keys()) | set(known_counts.keys()))
+
+        # Строим таблицу
+        chart_df = pd.DataFrame({
+            "Дата": all_dates,
+            "Добавлено": [added_counts.get(date, 0) for date in all_dates],
+            "Выучено": [known_counts.get(date, 0) for date in all_dates]
+        }).set_index("Дата")
+
+        if not chart_df.empty:
+            st.bar_chart(chart_df)
+        else:
+            st.info("Пока нет данных для графика.")
+
+            
     # === Служебная отладка ===
     with st.expander("📦 Отладка"):
         if df_display:
