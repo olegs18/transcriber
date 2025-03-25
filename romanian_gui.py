@@ -399,8 +399,20 @@ if st.session_state['results']:
 
     with tabs[2]:
         st.subheader("📊 Статистика изучения")
+        # 🎯 Цель на день (по умолчанию 10)
+        daily_goal = st.number_input("🎯 Цель на сегодня (фраз):", min_value=1, max_value=100, value=10, step=1)
         # Собираем все категории
-        
+        today_str = datetime.now().strftime('%Y-%m-%d')
+        today_known = sum(
+            1 for row in st.session_state['results']
+            if row.get("known") == "✅" and row.get("date_known") == today_str
+        )
+
+        # 🎯 Прогресс выполнения цели
+        percent_today = int((100 * today_known / daily_goal) if daily_goal > 0 else 0)
+        st.markdown(f"📅 Сегодня выучено: **{today_known} из {daily_goal}** ({percent_today}%)")
+        st.progress(percent_today)
+
         all_stats_categories = sorted(set(
             r.get("category", "").strip() for r in st.session_state['results'] if r.get("category")
         ))
