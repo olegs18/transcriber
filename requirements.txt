@@ -1,4 +1,5 @@
 streamlit
+streamlit-autorefresh
 googletrans==4.0.2
 gTTS
 pydub

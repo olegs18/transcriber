@@ -5,14 +5,18 @@ import os
 import zipfile
 from typing import List, Dict
 import streamlit as st
+import streamlit.components.v1 as components
 from pydub import AudioSegment
 from googletrans import Translator
 from gtts import gTTS
 from io import StringIO, BytesIO
 import base64
 from datetime import datetime
+import datetime as dt
 import pandas as pd
 from collections import Counter
+import json
+from streamlit_autorefresh import st_autorefresh
 
 # === Пути к файлам и папкам ===
 CSV_CACHE_FILE = "transcription_cache.csv"
@@ -159,8 +163,27 @@ def make_zip_of_audio(phrases: List[str], results: List[dict], with_translation=
                 zip_file.write(final_path, arcname=f"{base_name}_combo.mp3")
     zip_buffer.seek(0)
     return zip_buffer
+GOALS_FILE = "daily_goals.json"
+def load_goals() -> dict:
+    if os.path.exists(GOALS_FILE):
+        with open(GOALS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
 
+def save_goals(goals: dict):
+    with open(GOALS_FILE, "w", encoding="utf-8") as f:
+        json.dump(goals, f, ensure_ascii=False, indent=2)
 
+def plural_ru(n: int, forms=("фраза", "фразы", "фраз")) -> str:
+    n = abs(n)
+    if 11 <= (n % 100) <= 14:
+        return forms[2]
+    if n % 10 == 1:
+        return forms[0]
+    if 2 <= (n % 10) <= 4:
+        return forms[1]
+    return forms[2]
+        
 # === Streamlit UI ===
 st.set_page_config(page_title="Romanian Transcriber", layout="wide")
 st.title("📘 Transcriber & Translator")
@@ -310,7 +333,11 @@ if st.session_state['results']:
     ]
 
     # === Вкладки ===
-    tabs = st.tabs(["📋 Таблица", "🧠 Карточки (Flashcards)", "📊 Статистика"])
+    if "active_tab" not in st.session_state:
+        st.session_state['active_tab'] = 0  # по умолчанию открываем таблицу
+
+    tabs = st.tabs(["📋 Таблица", "🧠 Карточки", "📊 Статистика", "🔔 Напоминания"])
+    selected_tab_index = st.session_state['active_tab']
 
     # === Вкладка карточек ===
     with tabs[1]:
@@ -379,6 +406,7 @@ if st.session_state['results']:
         percent = int(100 * known / total) if total > 0 else 0
         st.markdown(f"📈 Прогресс: **{known} из {total}** ({percent}%)")
         st.progress(percent)
+        
         for row in df_display:
             row.setdefault("date_added", "")
             row.setdefault("date_known", "")
@@ -399,19 +427,35 @@ if st.session_state['results']:
 
     with tabs[2]:
         st.subheader("📊 Статистика изучения")
-        # 🎯 Цель на день (по умолчанию 10)
-        daily_goal = st.number_input("🎯 Цель на сегодня (фраз):", min_value=1, max_value=100, value=10, step=1)
-        # Собираем все категории
+        # Загружаем цели
+        goals = load_goals()
         today_str = datetime.now().strftime('%Y-%m-%d')
+        daily_goal = goals.get(today_str, 10)
+
+        # Ввод цели
+        new_goal = st.number_input("🎯 Цель на сегодня (фраз):", min_value=1, max_value=100, value=daily_goal, step=1)
+
+        # Сохраняем при изменении
+        if new_goal != daily_goal:
+            goals[today_str] = new_goal
+            save_goals(goals)
+            st.success("Цель на сегодня обновлена!")
+            daily_goal = new_goal  # Обновим для расчёта ниже
+
         today_known = sum(
             1 for row in st.session_state['results']
             if row.get("known") == "✅" and row.get("date_known") == today_str
         )
-
-        # 🎯 Прогресс выполнения цели
         percent_today = int((100 * today_known / daily_goal) if daily_goal > 0 else 0)
         st.markdown(f"📅 Сегодня выучено: **{today_known} из {daily_goal}** ({percent_today}%)")
         st.progress(percent_today)
+
+        # 🔔 Напоминание, если цель не достигнута
+        if today_known < daily_goal:
+            st.warning(f"🔔 Осталось выучить **{(daily_goal - today_known)} {plural_ru(daily_goal - today_known)}** до выполнения цели!")
+            
+            # if st.button("Перейти к изучению ⏩", key="go_to_flashcards"):
+            #     st.session_state['active_tab'] = 1  # Устанавливаем вкладку "Карточки"
 
         all_stats_categories = sorted(set(
             r.get("category", "").strip() for r in st.session_state['results'] if r.get("category")
@@ -424,8 +468,7 @@ if st.session_state['results']:
             row for row in st.session_state['results']
             if selected_stat_category == "(все)" or row.get("category") == selected_stat_category
         ]
-        st.code(selected_stat_category)
-        st.json(filtered_results)
+
         # Считаем добавленные фразы
         added_dates = [row.get("date_added", "") for row in filtered_results if row.get("date_added")]
         added_counts = Counter(added_dates)
@@ -454,6 +497,68 @@ if st.session_state['results']:
         else:
             st.info("Пока нет данных для графика.")
 
+    with tabs[3]:
+        if "reminder_enabled" not in st.session_state:
+            st.session_state["reminder_enabled"] = False
+        if "reminder_time" not in st.session_state:
+            st.session_state["reminder_time"] = dt.time(hour=20, minute=30)
+
+        st.subheader("🔔 Настройка напоминаний")
+
+        # Вкл/выкл и время
+        st.session_state["reminder_enabled"] = st.checkbox(
+            "Включить напоминание",
+            value=st.session_state["reminder_enabled"]
+        )
+        st.session_state["reminder_time"] = st.time_input(
+            "Выберите время напоминания:",
+            value=st.session_state["reminder_time"]
+        )
+
+        if st.session_state["reminder_enabled"]:
+            now = datetime.now()
+            t = st.session_state["reminder_time"]
+            target = now.replace(hour=t.hour, minute=t.minute, second=0, microsecond=0)
+            if target < now:
+                target += dt.timedelta(days=1)
+            delta_sec = int((target - now).total_seconds())
+            delta_min = delta_sec // 60
+
+            # Статус до момента срабатывания
+            if delta_sec > 60:
+                st.success(f"⏰ Напоминание сработает через {delta_min} мин. ({t.strftime('%H:%M')})")
+            elif delta_sec > 0:
+                st.warning(f"🔔 Скоро! В течение {delta_sec} сек.")
+            else:
+                st.info(f"✅ Напоминание на сегодня уже было ({t.strftime('%H:%M')})")
+
+            # === JS: Push + звук ===
+            components.html(f"""
+            <script>
+            function notifyWithSound() {{
+                if (Notification.permission !== "granted") {{
+                    Notification.requestPermission();
+                }}
+                setTimeout(function() {{
+                    // Уведомление
+                    new Notification("🧠 Время учить язык!", {{
+                        body: "Пора перейти к карточкам!",
+                        icon: "https://cdn-icons-png.flaticon.com/512/2942/2942809.png"
+                    }});
+                    // Звук
+                    let audio = new Audio("https://notificationsounds.com/storage/sounds/file-sounds-1153-pristine.mp3");
+                    audio.play();
+                }}, {delta_sec * 1000});
+            }}
+            notifyWithSound();
+            </script>
+            """, height=0)
+
+            # Автообновление интерфейса через 30 сек, если осталось < 10 мин
+            if delta_min < 10:
+                st_autorefresh(interval=30 * 1000, key="reminder_refresh")
+        else:
+            st.info("🔕 Напоминание отключено.") 
             
     # === Служебная отладка ===
     with st.expander("📦 Отладка"):
